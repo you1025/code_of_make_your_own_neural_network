@@ -1,6 +1,9 @@
-from typing import final
 import numpy as np
-from scipy.special import expit
+from scipy.special import expit, logit
+
+import os, sys
+sys.path.append(os.path.dirname(__file__))
+from functions import label_to_onehot, calc_inverse_weights, to_scaled_value, convert_target_list
 
 class NeuralNetwork:
 
@@ -8,8 +11,6 @@ class NeuralNetwork:
         # 活性化関数
         self.activation_function = expit
         self.prime_activation_function = (lambda x: expit(x) * (1.0 - expit(x)))
-#        self.activation_function       = np.vectorize(lambda x: 0.0 if x <= 0.0 else x)
-#        self.prime_activation_function = np.vectorize(lambda x: 0.0 if x <= 0.0 else 1.0)
 
         # 各レイヤのノード数
         self.input_nodes  = input_nodes
@@ -64,44 +65,46 @@ class NeuralNetwork:
 
         return (inputs, hidden_inputs, hidden_outputs, final_inputs, final_outputs)
 
-
-def get_mnist_raw_data(path):
-    with open(path, "r") as f:
-        train_data_list = f.readlines()
-
-    def convert_target_and_data(data):
-        splitted = np.asfarray(data.strip().split(","))
-        return (splitted[0], splitted[1:])
-    raw_trains = [
-        convert_target_and_data(train_data)
-        for train_data
-        in train_data_list
-    ]
-    
-    return raw_trains
-
-def convert_mnist_data(raw_data):
-    def convert_target_list(idx: int):
-        target_list = np.zeros(10) + 0.01
-        target_list[idx] = 0.99
-        return target_list
-
-    return [
-        (
-            convert_target_list(int(raw[0])),
-            raw[1] / 255 * 0.99 + 0.01
+    def get_reversed_inputs(self):
+        reversed_inputs = [
+            self._get_reversed_inputs_from_label(target_label).T[0]
+            for target_label
+            in np.arange(10)
+        ]
+        return (
+            np.array(np.arange(10)),
+            np.array(reversed_inputs)
         )
-        for raw
-        in raw_data
-    ]
 
-def nn_train(model, trains):
-    for (target_list, train_list) in trains:
-        model.train(train_list, target_list)
+    def get_reversed_inputs_for_train(self):
+        (target_labels, reversed_inputs) = self.get_reversed_inputs()
 
-def calc_accuracy(model, tests):
-    return np.array([
-        np.argmax(target_list) == np.argmax(model.query(test_list))
-        for (target_list, test_list)
-        in tests
-    ]).mean()
+        rng = np.random.default_rng()
+        train_data = []
+        for idx in np.arange(10):
+            target_label = target_labels[idx]
+            reversed_input = reversed_inputs[idx]
+            for _ in np.arange(10):
+                train_data.append((
+                    convert_target_list(target_label),
+                    reversed_input + np.abs(rng.normal(0, 0.25, 784))
+                ))
+        return train_data
+
+    def _get_reversed_inputs_from_label(self, target_label):
+        # 最終層
+        targets = label_to_onehot(target_label)
+        final_inputs = logit(targets)
+
+        # 中間層
+        hidden_inverse_weights = calc_inverse_weights(self.w_o_h)
+        hidden_outputs_raw = np.dot(self.w_o_h.T, (final_inputs - self.b_o))
+        hidden_outputs = to_scaled_value(hidden_outputs_raw)
+        hidden_inputs = logit(hidden_outputs)
+
+        # 入力層
+        input_inverse_weights = calc_inverse_weights(self.w_h_i)
+        input_outputs_raw = np.dot(self.w_h_i.T, (hidden_inputs - self.b_h))
+        inputs = to_scaled_value(input_outputs_raw)
+
+        return inputs
